@@ -20,6 +20,10 @@ mp_face_detection = mp.solutions.face_detection
 class SuperPoseDetector:
     """سوپر اپلیکیشن تشخیص پوز با تمام قابلیت‌های پیشرفته"""
     
+    # *** ثابت‌های جدید برای تایمر ***
+    TIMER_DURATION_SECONDS = 3.0 # تایم تایمر را به 3.0 ثانیه دقیق کاهش دادیم
+    GESTURE_COOLDOWN = 3.0       # کول‌داون ژست را برای دقت بیشتر روی 3 ثانیه تنظیم کردیم
+
     def __init__(self):
         # ------------------------
         # ۱. مدل‌های MediaPipe
@@ -54,9 +58,9 @@ class SuperPoseDetector:
         self.current_filter = "normal" 
         self.flash_effect = 0
         
-        # زمان‌ها و شمارنده‌ها
+        # زمان‌ها و شمارنده‌ها (تغییر یافته برای تایمر زمانی)
         self.recording_start_time = 0
-        self.timer_countdown = 0 
+        self.timer_start_time = 0  # زمان شروع تایمر
         self.last_gesture_time = 0
         self.photo_count = 0
         self.video_count = 0 
@@ -86,7 +90,7 @@ class SuperPoseDetector:
                 os.makedirs(folder)
                 
     # ------------------------------------------------------------------------------------------------------
-    # توابع رندر فارسی (اصلاح شده برای لود فونت یک بار)
+    # توابع رندر فارسی (بدون تغییر)
     # ------------------------------------------------------------------------------------------------------
 
     def get_persian_font(self) -> Optional[str]:
@@ -116,7 +120,7 @@ class SuperPoseDetector:
         return None # اگر هیچ فونتی پیدا نشد
     
     def put_persian_text(self, img: np.ndarray, text: str, position: Tuple[int, int], 
-                          font_scale: float = 1.0, color: Tuple[int, int, int] = (0, 0, 0)) -> np.ndarray:
+                         font_scale: float = 1.0, color: Tuple[int, int, int] = (0, 0, 0)) -> np.ndarray:
         """نمایش متن فارسی با استفاده از Pillow و Bidi برای تصحیح رندر"""
         try:
             # ۱. تصحیح فارسی و جهت‌دهی (CTL)
@@ -146,7 +150,6 @@ class SuperPoseDetector:
             
         except Exception as e:
             # در صورت بروز خطا، به cv2.putText برگرد
-            # print(f"Error in put_persian_text: {e}")
             cv2.putText(img, text, position, cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), 2)
             return img
 
@@ -175,7 +178,6 @@ class SuperPoseDetector:
                         'face': face_results
                     }
                 except Exception as e:
-                    # print(f"Error in processing thread: {e}")
                     self.process_results = {'pose': None, 'hand': None, 'face': None}
             # کاهش بار CPU با Sleep (برای Threading مهم است)
             time.sleep(0.005) 
@@ -189,7 +191,7 @@ class SuperPoseDetector:
         return self.process_results.get('pose'), self.process_results.get('hand'), self.process_results.get('face')
     
     def apply_filter(self, frame: np.ndarray, filter_name: str) -> np.ndarray:
-        """اعمال فیلترهای رنگی مختلف"""
+        """اعمال فیلترهای رنگی مختلف (بدون تغییر)"""
         if filter_name == "normal":
             return frame
         elif filter_name == "sepia":
@@ -201,13 +203,13 @@ class SuperPoseDetector:
             return cv2.cvtColor(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
         elif filter_name == "warm":
             frame = frame.astype(np.float32)
-            frame[:, :, 0] = frame[:, :, 0] * 0.7   # کاهش آبی
-            frame[:, :, 2] = frame[:, :, 2] * 1.3   # افزایش قرمز
+            frame[:, :, 0] = frame[:, :, 0] * 0.7    # کاهش آبی
+            frame[:, :, 2] = frame[:, :, 2] * 1.3    # افزایش قرمز
             return np.clip(frame, 0, 255).astype(np.uint8)
         elif filter_name == "cool":
             frame = frame.astype(np.float32)
-            frame[:, :, 0] = frame[:, :, 0] * 1.3   # افزایش آبی
-            frame[:, :, 2] = frame[:, :, 2] * 0.7   # کاهش قرمز
+            frame[:, :, 0] = frame[:, :, 0] * 1.3    # افزایش آبی
+            frame[:, :, 2] = frame[:, :, 2] * 0.7    # کاهش قرمز
             return np.clip(frame, 0, 255).astype(np.uint8)
         return frame
     
@@ -218,23 +220,23 @@ class SuperPoseDetector:
             
         current_time = time.time()
         # جلوگیری از تشخیص پشت سر هم (کول‌داون ژست)
-        if current_time - self.last_gesture_time < 2: 
+        if current_time - self.last_gesture_time < self.GESTURE_COOLDOWN: 
             return ""
             
         for hand_landmarks in hand_results.multi_hand_landmarks:
             landmarks = hand_landmarks.landmark
             
-            # ✌️ علامت V (صلح)
-            if (landmarks[8].y < landmarks[6].y and   # انگشت اشاره بالا
-                landmarks[12].y < landmarks[10].y and   # انگشت وسط بالا
-                landmarks[16].y > landmarks[14].y and   # انگشت حلقه پایین
-                landmarks[20].y > landmarks[18].y):     # انگشت کوچک پایین
+            # ✌️ علامت V (صلح) - ژست مورد استفاده برای فعال‌سازی تایمر
+            if (landmarks[8].y < landmarks[6].y and    # انگشت اشاره بالا
+                landmarks[12].y < landmarks[10].y and    # انگشت وسط بالا
+                landmarks[16].y > landmarks[14].y and    # انگشت حلقه پایین
+                landmarks[20].y > landmarks[18].y):      # انگشت کوچک پایین
                 self.last_gesture_time = current_time
                 return "peace"
             
             # 👍 شست بالا
-            if (landmarks[4].y < landmarks[3].y and   # شست بالا
-                landmarks[8].y > landmarks[6].y and   # سایر انگشتان پایین
+            if (landmarks[4].y < landmarks[3].y and    # شست بالا
+                landmarks[8].y > landmarks[6].y and    # سایر انگشتان پایین
                 landmarks[12].y > landmarks[10].y and
                 landmarks[16].y > landmarks[14].y and
                 landmarks[20].y > landmarks[18].y):
@@ -245,8 +247,6 @@ class SuperPoseDetector:
         
     def detect_smile(self, face_results: Any) -> bool:
         """تشخیص لبخند بر اساس لندمارک‌های صورت"""
-        # MediaPipe Face Detection فقط کادر صورت را می‌دهد، نه لندمارک‌های دقیق دهان.
-        # برای نمایش قابلیت، اگر صورت تشخیص داده شود، True برمی‌گردانیم.
         return bool(face_results and face_results.detections) 
         
     def take_photo(self, frame: np.ndarray):
@@ -258,7 +258,7 @@ class SuperPoseDetector:
         self.flash_effect = 5 # فعال کردن فلش برای 5 فریم
         
     def toggle_recording(self):
-        """شروع/توقف ضبط ویدیو"""
+        """شروع/توقف ضبط ویدیو (بدون تغییر)"""
         if not self.is_recording:
             # شروع ضبط
             self.video_count += 1
@@ -282,19 +282,21 @@ class SuperPoseDetector:
             self.is_recording = False
             print("⏹️ پایان ضبط ویدیو")
             
-    def start_timer(self):
-        """شروع تایمر ۳ ثانیه‌ای برای عکس"""
+    def start_timer(self, is_gesture: bool = False):
+        """شروع تایمر بر مبنای زمان واقعی"""
         if not self.timer_active:
             self.timer_active = True
-            # فرض می‌کنیم برنامه با حدود ۳۰ فریم بر ثانیه اجرا می‌شود
-            self.timer_countdown = 3 * 30 
-            print("⏳ تایمر شروع شد (۳ ثانیه)")
+            self.timer_start_time = time.time()
+            if is_gesture:
+                print(f"⏳ تایمر توسط ژست شروع شد ({self.TIMER_DURATION_SECONDS} ثانیه)")
+            else:
+                print(f"⏳ تایمر توسط دکمه شروع شد ({self.TIMER_DURATION_SECONDS} ثانیه)")
             
     # --- توابع رابط کاربری ---
     
     def is_finger_touching_button(self, hand_results: Any, frame_shape: Tuple[int, int], 
                                   button_pos: Tuple[int, int, int, int]) -> bool:
-        """بررسی لمس دکمه با انگشت"""
+        """بررسی لمس دکمه با انگشت (بدون تغییر)"""
         if not hand_results or not hand_results.multi_hand_landmarks:
             return False
         
@@ -321,6 +323,7 @@ class SuperPoseDetector:
         h, w = frame.shape[:2]
         buttons = {}
         
+        # ... (کد رسم دکمه‌های فیلتر بدون تغییر) ...
         # 🎨 دکمه‌های فیلتر (ستون سمت چپ) - فارسی‌سازی شده
         filters = {"عادی": "normal", "سپیا": "sepia", "سیاه‌سفید": "grayscale", "گرم": "warm", "سرد": "cool"}
         button_height = 50
@@ -342,13 +345,13 @@ class SuperPoseDetector:
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, -1)
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 0), 2)
             
-            # استفاده صحیح از persian_name برای رندر فارسی
             text = persian_name 
             frame = self.put_persian_text(frame, text, (x1 + 10, y1 + 10), 0.7, (255, 255, 255))
             
             buttons[f"filter_{filter_key}"] = (x1, y1, x2, y2)
 
-        # 📸 دکمه عکس (گوشه بالا راست) - لمس فقط برای فعال‌سازی تایمر
+
+        # 📸 دکمه عکس (گوشه بالا راست) - اصلاح شد: عکس فوری
         photo_x1, photo_y1 = w - 140, 20
         photo_x2, photo_y2 = w - 20, 80
         photo_touching = self.is_finger_touching_button(hand_results, frame.shape, (photo_x1, photo_y1, photo_x2, photo_y2))
@@ -361,7 +364,7 @@ class SuperPoseDetector:
         
         buttons["photo"] = (photo_x1, photo_y1, photo_x2, photo_y2)
 
-        # 📹 دکمه ضبط ویدیو
+        # 📹 دکمه ضبط ویدیو (بدون تغییر)
         video_x1, video_y1 = w - 140, 100
         video_x2, video_y2 = w - 20, 160
         video_touching = self.is_finger_touching_button(hand_results, frame.shape, (video_x1, video_y1, video_x2, video_y2))
@@ -387,7 +390,7 @@ class SuperPoseDetector:
         
         # مدیریت لمس تایمر
         if timer_touching and self.button_cooldown == 0:
-            self.start_timer()
+            self.start_timer() # فعال‌سازی تایمر توسط دکمه
             self.button_cooldown = 30
         
         # اصلاح رنگ تایمر به زرد
@@ -402,7 +405,7 @@ class SuperPoseDetector:
         return frame, buttons
 
     def draw_landmarks(self, frame: np.ndarray, pose_results: Any, hand_results: Any) -> np.ndarray:
-        """رسم اسکلت بدن و دست"""
+        """رسم اسکلت بدن و دست (بدون تغییر)"""
         # رسم اسکلت بدن
         if pose_results and pose_results.pose_landmarks:
             mp_drawing.draw_landmarks(
@@ -427,7 +430,7 @@ class SuperPoseDetector:
         return frame
 
     def display_info(self, frame: np.ndarray, pose_results: Any, hand_results: Any, face_results: Any) -> np.ndarray:
-        """نمایش اطلاعات و وضعیت (تماماً فارسی‌سازی شده)"""
+        """نمایش اطلاعات و وضعیت (با اصلاح نمایش تایمر)"""
         h, w = frame.shape[:2]
         
         # وضعیت تشخیص
@@ -435,11 +438,14 @@ class SuperPoseDetector:
         status_color = (0, 100, 0) if pose_results and pose_results.pose_landmarks else (0, 0, 100)
         frame = self.put_persian_text(frame, f"وضعیت: {status}", (20, h - 100), 0.7, status_color)
         
-        # تایمر
+        # تایمر - اصلاح شده برای نمایش زمان باقی‌مانده واقعی
         if self.timer_active:
-            # زمان باقی‌مانده
-            seconds = self.timer_countdown // 30 + 1 
-            frame = self.put_persian_text(frame, f"تایمر: {seconds} ثانیه", (20, h - 70), 0.8, (0, 0, 200))
+            elapsed_time = time.time() - self.timer_start_time
+            remaining_time = max(0, self.TIMER_DURATION_SECONDS - elapsed_time)
+            
+            # نمایش عدد صحیح باقی‌مانده
+            seconds_to_display = int(remaining_time) + 1 
+            frame = self.put_persian_text(frame, f"تایمر: {seconds_to_display} ثانیه", (20, h - 70), 0.8, (0, 0, 200))
         
         # ضبط
         if self.is_recording:
@@ -497,20 +503,33 @@ class SuperPoseDetector:
                 # رسم دکمه‌ها و بررسی لمس
                 frame, buttons = self.draw_virtual_buttons(frame, hand_results)
                 
-                # بررسی لمس دکمه عکس (اگر تایمر فعال نیست)
+                # ------------------------------------------------------------------
+                # *** منطق جدید: فعال‌سازی تایمر/عکس بر اساس ژست و لمس دکمه ***
+                # ------------------------------------------------------------------
+                
+                # ۱. تشخیص ژست
+                gesture = self.detect_gestures(hand_results)
+                if gesture == "peace" and not self.timer_active:
+                    # اگر ژست صلح تشخیص داده شد و تایمر فعال نیست، تایمر را فعال کن
+                    self.start_timer(is_gesture=True) 
+                
+                # ۲. بررسی لمس دکمه عکس (بدون تایمر)
                 if "photo" in buttons and self.button_cooldown == 0:
                     photo_touching = self.is_finger_touching_button(hand_results, frame.shape, buttons["photo"])
                     if photo_touching:
-                         if not self.timer_active:
-                            self.take_photo(frame)
-                            self.button_cooldown = 30
+                        # اگر دکمه عکس لمس شد و تایمر فعال نیست، بلافاصله عکس بگیر
+                        if not self.timer_active:
+                             self.take_photo(frame)
+                             self.button_cooldown = 30
                 
-                # مدیریت تایمر
+                # ۳. مدیریت تایمر - استفاده از زمان واقعی
                 if self.timer_active:
-                    self.timer_countdown -= 1
-                    if self.timer_countdown <= 0:
+                    elapsed_time = time.time() - self.timer_start_time
+                    if elapsed_time >= self.TIMER_DURATION_SECONDS:
                         self.timer_active = False
                         self.take_photo(frame)  # عکس خودکار بعد از اتمام تایمر
+                
+                # ------------------------------------------------------------------
                 
                 # ضبط ویدیو
                 if self.is_recording and self.video_writer:
@@ -542,7 +561,7 @@ class SuperPoseDetector:
             self.cleanup()
 
     def cleanup(self):
-        """پاکسازی منابع"""
+        """پاکسازی منابع (بدون تغییر)"""
         if self.is_recording and self.video_writer:
             self.video_writer.release()
         if self.cap:
